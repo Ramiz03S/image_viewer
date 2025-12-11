@@ -29,16 +29,17 @@ int inflatef(FILE* src, FILE* dst){
     infstream.next_in = Z_NULL; 
 
     ret = inflateInit(&infstream);
-    if (ret !=Z_OK) {return ret;}
+    if (ret !=Z_OK) {
+        return ret;
+    }
 
     for(;;){
-
         if (infstream.avail_in == 0) {
             infstream.avail_in = (uInt)fread(deflated_data_buff,sizeof(Uint8),IN_CHUNK,src);
             if (infstream.avail_in == 0) {
                 break;
             }
-            infstream.next_in = inflated_data_buff;
+            infstream.next_in = deflated_data_buff;
         }
         do{
             infstream.avail_out = (uInt)(OUT_CHUNK); 
@@ -85,9 +86,10 @@ int main(){
     type_buff[4]='\0';
     
     // IHDR chunk
-    Uint8 IHDR_data_buff[13];
     read(STDIN_FILENO, length_buff, 4);
     read(STDIN_FILENO, type_buff, 4);
+    Uint32 IHDR_length = generate_32_BE(length_buff);
+    Uint8 *IHDR_data_buff = malloc(IHDR_length);
     read(STDIN_FILENO, IHDR_data_buff, 13);
     read(STDIN_FILENO, crc_buff, 4);
 
@@ -98,9 +100,10 @@ int main(){
     Uint8 compression = IHDR_data_buff[10];
     Uint8 filter_method = IHDR_data_buff[11];
     Uint8 interlace = IHDR_data_buff[12];
+    free(IHDR_data_buff);
 
     FILE* fptr;
-    fptr = fopen(SRC_FILE, "a+");
+    fptr = fopen(SRC_FILE, "wb");
     assert(fptr);
     
     int end_of_file = 0;
@@ -109,10 +112,10 @@ int main(){
         read(STDIN_FILENO, length_buff, 4);
         read(STDIN_FILENO, type_buff, 4);
         Uint32 data_length = generate_32_BE(length_buff);
-
         
         if(strcmp(type_buff,"IEND")==0){
             printf("\nEND OF FILE\n");
+            read(STDIN_FILENO, crc_buff, 4);
             end_of_file = 1;
             continue;
         }
@@ -136,7 +139,7 @@ int main(){
 
     FILE* src; FILE* dst;
     src = fopen(SRC_FILE, "rb");
-    dst = fopen(DST_FILE, "a+");
+    dst = fopen(DST_FILE, "wb");
 
     ret = inflatef(src, dst);
     printf("\n%d\n",ret);
