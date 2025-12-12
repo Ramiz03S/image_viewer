@@ -16,6 +16,43 @@ Uint32 generate_32_BE(Uint8 * buff){
             (Uint32)buff[3];
 }
 
+void scan_all_IDAT(FILE* fptr){
+
+    Uint8 length_buff[4];
+    Uint8 type_buff[5];
+    Uint8 crc_buff[4];
+    type_buff[4]='\0';
+
+    int end_of_file = 0;
+        while(!end_of_file){
+            //processing one chunk
+            read(STDIN_FILENO, length_buff, 4);
+            read(STDIN_FILENO, type_buff, 4);
+            Uint32 data_length = generate_32_BE(length_buff);
+            
+            if(strcmp(type_buff,"IEND")==0){
+                printf("\nEND OF FILE\n");
+                read(STDIN_FILENO, crc_buff, 4);
+                end_of_file = 1;
+                continue;
+            }
+            if(strcmp(type_buff,"IDAT")==0){
+
+                Uint8 * deflated_data_buff = malloc(data_length);
+                read(STDIN_FILENO, deflated_data_buff, data_length);
+                fwrite(deflated_data_buff,sizeof(Uint8),data_length,fptr);
+                free(deflated_data_buff);
+                
+            }
+            else{
+                Uint8 * length_buff = malloc(data_length);
+                read(STDIN_FILENO, length_buff, data_length);
+                free(length_buff);
+            }
+            read(STDIN_FILENO, crc_buff, 4);
+        }
+}
+
 int inflatef(FILE* src, FILE* dst){
     Uint8 inflated_data_buff [OUT_CHUNK];
     Uint8 deflated_data_buff [IN_CHUNK];
@@ -106,35 +143,7 @@ int main(){
     fptr = fopen(SRC_FILE, "wb");
     assert(fptr);
     
-    int end_of_file = 0;
-    while(!end_of_file){
-        //processing one chunk
-        read(STDIN_FILENO, length_buff, 4);
-        read(STDIN_FILENO, type_buff, 4);
-        Uint32 data_length = generate_32_BE(length_buff);
-        
-        if(strcmp(type_buff,"IEND")==0){
-            printf("\nEND OF FILE\n");
-            read(STDIN_FILENO, crc_buff, 4);
-            end_of_file = 1;
-            continue;
-        }
-        if(strcmp(type_buff,"IDAT")==0){
-
-            Uint8 * deflated_data_buff = malloc(data_length);
-            read(STDIN_FILENO, deflated_data_buff, data_length);
-            fwrite(deflated_data_buff,sizeof(Uint8),data_length,fptr);
-            free(deflated_data_buff);
-            
-        }
-        else{
-            Uint8 * length_buff = malloc(data_length);
-            read(STDIN_FILENO, length_buff, data_length);
-            free(length_buff);
-        }
-        read(STDIN_FILENO, crc_buff, 4);
-    }
-    
+    scan_all_IDAT(fptr);
     fclose(fptr);
 
     FILE* src; FILE* dst;
