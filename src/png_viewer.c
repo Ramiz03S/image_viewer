@@ -3,10 +3,12 @@
 #include <SDL2/SDL.h>
 #include <assert.h>
 #include <zlib.h>
+#include <math.h>
 #define IN_CHUNK 16384
 #define OUT_CHUNK 16384
-#define SRC_FILE "IDAT_deflated"
-#define DST_FILE "IDAT_inflated"
+#define DEFLATED_FILE "IDAT_deflated"
+#define INFLATED_FILE "IDAT_inflated"
+#define UNFILTERED_FILE "IDAT_unfiltered"
 
 Uint32 generate_32_BE(Uint8 * buff){
     // big endian
@@ -14,6 +16,16 @@ Uint32 generate_32_BE(Uint8 * buff){
             (Uint32)buff[1] << 16 |
             (Uint32)buff[2] << 8 |
             (Uint32)buff[3];
+}
+
+Uint8 paeth_predictor(Uint8 left, Uint8 upper, Uint8 upper_left){
+    Uint8 p,pl,pu,pul;
+
+    p = left + upper - upper_left;
+    pl = (Uint8)abs(p - left);
+    pu = (Uint8)abs(p - upper);
+    pul = (Uint8)abs(p - upper_left);
+    return (pl <= pu && pl <= pul)? left : ((pu <= pul)? upper : upper_left);
 }
 
 void scan_all_IDAT(FILE* fptr){
@@ -108,6 +120,78 @@ int inflatef(FILE* src, FILE* dst){
     return Z_OK;
 }
 
+void unfilter_f(FILE* inflate_src, FILE* unfilter_dst, size_t scanline_length, size_t bytesperpixel){
+    
+    Uint8 scanline_buff[scanline_length]; // stores a scanline from the uncompressed stream
+    Uint8 unfiltered_buff[scanline_length]; // stores the unfiltered stream to be written to the file
+    Uint8 prev_scanline_buff[scanline_length]; // stores the previous unfiltered scanline
+    Uint8 type_buff[1];
+    int ret;
+
+    memset(prev_scanline_buff, 0, scanline_length);
+    memset(unfiltered_buff, 0, scanline_length);
+    int scanlines_counter = 0;
+    int end_of_file = 0;
+    while(!end_of_file){
+
+        if(fread(type_buff,sizeof(Uint8),1,inflate_src) != 1){
+            end_of_file = 1; 
+            continue;
+        }
+        fread(scanline_buff,sizeof(Uint8),scanline_length,inflate_src);
+
+        switch (type_buff[0]) {
+            case '\000':
+                fwrite(scanline_buff, 1, scanline_length, unfilter_dst);
+                break;
+            case '\001':
+                // Sub
+                //unfilt(x) = filt(x) + unfilt(x−bpp)
+                for(int i = 0; i < bytesperpixel; i++){
+                    unfiltered_buff[i] = scanline_buff[i] + 0;
+                }
+                for(int i = bytesperpixel; i < scanline_length; i++){
+                    unfiltered_buff[i] = scanline_buff[i] + unfiltered_buff[i - bytesperpixel];
+                }
+                break;
+
+            case '\002':
+                // Up
+                // unfilt(x) = filt(x) + Prior(x)
+                for(int i = 0; i < scanline_length; i++){
+                    unfiltered_buff[i] = scanline_buff[i] + prev_scanline_buff[i] ;
+                }
+                break;
+
+            case '\003':
+                // Average of top and left
+                // unfilt(x) = filt(x) + floor((unfilt(x-bpp)+Prior(x))/2)
+                for(int i = 0; i < bytesperpixel; i++){
+                    unfiltered_buff[i] = scanline_buff[i] + (Uint8)floor(( 0 + prev_scanline_buff[i])/2.0);
+                }
+                for(int i = bytesperpixel; i < scanline_length; i++){
+                    unfiltered_buff[i] = scanline_buff[i] + (Uint8)floor(( unfiltered_buff[i - bytesperpixel] + prev_scanline_buff[i])/2.0);
+                }
+                break;
+
+            case '\004':
+                // Paeth
+                for(int i = 0; i < bytesperpixel; i++){
+                    unfiltered_buff[i] = scanline_buff[i] + paeth_predictor(0, prev_scanline_buff[i], 0);
+                }
+                for(int i = bytesperpixel; i < scanline_length; i++){
+                    unfiltered_buff[i] = scanline_buff[i] + paeth_predictor(unfiltered_buff[i - bytesperpixel], prev_scanline_buff[i], prev_scanline_buff[i - bytesperpixel]);
+                }
+                break;
+        }
+        memcpy(prev_scanline_buff, unfiltered_buff, scanline_length);
+        fwrite(unfiltered_buff, 1, scanline_length, unfilter_dst);
+
+        scanlines_counter++;
+        
+    }
+}
+
 int main(){
 
     int ret;
@@ -139,19 +223,42 @@ int main(){
     Uint8 interlace = IHDR_data_buff[12];
     free(IHDR_data_buff);
 
+    // each index reprents the color types possible in a png (0,2,3,4,6)
+    // zeros for (1,5) as they're not valid color types
+    size_t samples_per_pixel[7] = {1,0,3,1,2,0,4};
+    size_t bits_per_pixel = bit_depth * samples_per_pixel[color_type];
+
     FILE* fptr;
-    fptr = fopen(SRC_FILE, "wb");
+    fptr = fopen(DEFLATED_FILE, "wb");
     assert(fptr);
     
     scan_all_IDAT(fptr);
     fclose(fptr);
 
-    FILE* src; FILE* dst;
-    src = fopen(SRC_FILE, "rb");
-    dst = fopen(DST_FILE, "wb");
+    FILE* deflate_src; FILE* inflate_dst;
+    deflate_src = fopen(DEFLATED_FILE, "rb");
+    inflate_dst = fopen(INFLATED_FILE, "wb");
 
-    ret = inflatef(src, dst);
+    ret = inflatef(deflate_src, inflate_dst);
     printf("\n%d\n",ret);
+
+    fclose(deflate_src);
+    fclose(inflate_dst);
+
+    // unfiltering
+    FILE* unfilter_dst;
+    inflate_dst = fopen(INFLATED_FILE, "rb");
+    unfilter_dst = fopen(UNFILTERED_FILE, "wb");
+
+    
+    
+    size_t bytesperpixel = ceil(bits_per_pixel / 8.0);
+    size_t scanline_length = width * bytesperpixel;
+
+    unfilter_f(inflate_dst, unfilter_dst, scanline_length, bytesperpixel);
+
+    fclose(inflate_dst);
+    fclose(unfilter_dst);
 
     return 0;
 }
