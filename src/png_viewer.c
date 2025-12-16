@@ -41,9 +41,8 @@ void scan_all_IDAT(FILE* fptr){
             read(STDIN_FILENO, length_buff, 4);
             read(STDIN_FILENO, type_buff, 4);
             Uint32 data_length = generate_32_BE(length_buff);
-            
+            printf("%s\n",type_buff);
             if(strcmp(type_buff,"IEND")==0){
-                printf("\nEND OF FILE\n");
                 read(STDIN_FILENO, crc_buff, 4);
                 end_of_file = 1;
                 continue;
@@ -192,6 +191,65 @@ void unfilter_f(FILE* inflate_src, FILE* unfilter_dst, size_t scanline_length, s
     }
 }
 
+Uint32 SDL_Color_to_Uint32(SDL_Color color, SDL_Surface * psurface){
+    return SDL_MapRGBA(psurface->format, color.r, color.g, color.b, color.a);
+}
+
+void display_img(FILE * unfilter_src, Uint32 width,  Uint32 height, Uint8 bit_depth, Uint8 color_type){
+    SDL_Window * pwindow = SDL_CreateWindow("image", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, width, height, 0);
+    SDL_Surface * psurface = SDL_GetWindowSurface(pwindow);
+    Uint8 red = 0; Uint8 green = 0; Uint8 blue = 0; Uint8 alpha = 0;
+
+    if( color_type == 2 && bit_depth == 8){
+
+        for(int y = 0; y < height; y++){
+            for(int x = 0; x < width; x++){
+                red = getc(unfilter_src);
+                green = getc(unfilter_src);
+                blue = getc(unfilter_src);
+                SDL_Color color = {.r = red, .g = green, .b = blue, .a = 1};
+                red = blue = green = 0;
+                SDL_Rect pixel = {x,y,1,1};
+                Uint32 color32 = SDL_Color_to_Uint32(color, psurface);
+
+                SDL_FillRect(psurface,&pixel,color32);
+            }        
+        }
+    }
+    if( color_type == 6 && bit_depth == 8){
+
+        for(int y = 0; y < height; y++){
+            for(int x = 0; x < width; x++){
+                red = getc(unfilter_src);
+                green = getc(unfilter_src);
+                blue = getc(unfilter_src);
+                alpha = getc(unfilter_src);
+                SDL_Color color = {.r = red, .g = green, .b = blue, .a = alpha};
+                red = blue = green = 0;
+                SDL_Rect pixel = {x,y,1,1};
+                Uint32 color32 = SDL_Color_to_Uint32(color, psurface);
+
+                SDL_FillRect(psurface,&pixel,color32);
+            }        
+        }
+    }
+
+    SDL_UpdateWindowSurface(pwindow);
+    fclose(unfilter_src);
+
+    SDL_Event event;
+    int image_show = 1;
+    while(image_show){
+        while(SDL_PollEvent(&event)){
+            switch(event.type){
+                case SDL_QUIT:
+                    image_show = 0;
+                
+            }
+        }
+    }
+}
+
 int main(){
 
     int ret;
@@ -240,7 +298,6 @@ int main(){
     inflate_dst = fopen(INFLATED_FILE, "wb");
 
     ret = inflatef(deflate_src, inflate_dst);
-    printf("\n%d\n",ret);
 
     fclose(deflate_src);
     fclose(inflate_dst);
@@ -259,6 +316,10 @@ int main(){
 
     fclose(inflate_dst);
     fclose(unfilter_dst);
+
+    FILE * unfilter_src;
+    unfilter_src = fopen(UNFILTERED_FILE, "rb");
+    display_img(unfilter_src, width, height, bit_depth, color_type);
 
     return 0;
 }
